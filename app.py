@@ -357,6 +357,7 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
     - Keep values as close as possible to original text
     - Normalize date as YYYY/MM/DD if possible
     - Remove OCR noise
+    - 原反 and 加工賃 must be fields inside each 明細 row, not top-level field
 
     OUTPUT FORMAT RULES:
     - JSON keys must be simple, clean Japanese words
