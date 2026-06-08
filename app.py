@@ -149,6 +149,8 @@ async def process_document(
     logging.info("Processing request for file=%s, content_type=%s", filename, content_type)
 
     ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
+    print(ocr_text)
+
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
     
     items = ai_result.get("明細", [])
@@ -168,15 +170,24 @@ async def process_document(
     )
 
 def fix_kakouhin(items, ocr_text):
-    # find all numbers from OCR text
-    numbers = re.findall(r'\d{3,6}', ocr_text)
+    # only extract larger numbers (more likely price/material)
+    numbers = re.findall(r'\d{4,6}', ocr_text)
 
-    # assume last numbers are related to 原反 / 加工賃
-    if len(numbers) >= len(items) * 2:
-        tail = numbers[-(len(items) * 2):]
+    # filter obvious noise (postal codes like 8715, phone parts)
+    filtered = []
+
+    for n in numbers:
+        if n.startswith("0"):
+            continue
+        if int(n) < 1000:
+            continue
+        filtered.append(n)
+
+    # now use filtered values
+    if len(filtered) >= len(items) * 2:
+        tail = filtered[-(len(items) * 2):]
 
         for i, item in enumerate(items):
-            # only fix if wrong
             if item.get("加工賃") in ["", "0", 0]:
                 item["加工賃"] = tail[i * 2 + 1]
 
@@ -370,6 +381,7 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
         Return ONLY valid JSON.
 
         RULES:
+        - Extract all visible data text content from file
         - Extract all information exactly as in the OCR text
         - JSON keys must be simple Japanese words
         - Keep values exactly as written
