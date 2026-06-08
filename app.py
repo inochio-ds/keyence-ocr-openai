@@ -335,7 +335,25 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
 
 
 def build_user_prompt(ocr_text: str, prompt: str) -> str:
-    base = "Extract structured information from the OCR text below and return valid JSON."
+    base = """Extract structured information from the OCR text below and return valid JSON.
+    You are an AI that extracts structured data from OCR text of Japanese documents.
+
+    TASK:
+    Extract as much structured information as possible from the OCR text and return ONLY valid JSON.
+
+    REQUIREMENTS:
+    - JSON keys MUST be written in Japanese
+    - Return ONLY JSON (no explanation, no markdown)
+    - Do NOT include English keys
+    - Do NOT include fields that are not present in the text
+    - If a value is unclear, use empty string 
+    - Read and extract carefully and exactly what is written in file's content
+
+    RULES:
+    - Keep values as close as possible to original text
+    - Normalize date as YYYY-MM-DD if possible
+    - Remove OCR noise
+        """
     if prompt:
         base = f"{base}\n\nAdditional extraction instructions:\n{prompt.strip()}"
 
