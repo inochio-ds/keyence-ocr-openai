@@ -410,6 +410,10 @@ def dict_to_horizontal_tsv(data: Dict[str, Any]) -> str:
     headers = reorder_columns(data)
 
     output = io.StringIO()
+
+    # ✅ tell Excel separator is TAB
+    output.write("sep=\t\n")
+
     writer = csv.writer(output, delimiter="\t", lineterminator="\n")
 
     writer.writerow(headers)
