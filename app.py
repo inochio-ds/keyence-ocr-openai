@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 import requests
 import uvicorn
 from dotenv import load_dotenv
+import re
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from requests import Response as RequestsResponse
@@ -149,6 +150,12 @@ async def process_document(
 
     ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
+    
+    items = ai_result.get("明細", [])
+
+    fixed_items = fix_kakouhin(items, ocr_text)
+
+    ai_result["明細"] = fixed_items
 
     xlsx_bytes = build_xlsx_from_ai_result(ai_result)
 
@@ -160,6 +167,23 @@ async def process_document(
         }
     )
 
+def fix_kakouhin(items, ocr_text):
+    # find all numbers from OCR text
+    numbers = re.findall(r'\d{3,6}', ocr_text)
+
+    # assume last numbers are related to 原反 / 加工賃
+    if len(numbers) >= len(items) * 2:
+        tail = numbers[-(len(items) * 2):]
+
+        for i, item in enumerate(items):
+            # only fix if wrong
+            if item.get("加工賃") in ["", "0", 0]:
+                item["加工賃"] = tail[i * 2 + 1]
+
+            if item.get("原反") in ["", "0", 0]:
+                item["原反"] = tail[i * 2]
+
+    return items
 
 def validate_required_env() -> None:
     required = {
@@ -341,36 +365,34 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
 
 def build_user_prompt(ocr_text: str, prompt: str) -> str:
     base = """
-    You extract structured data from OCR text of Japanese documents.
+        You extract structured data from OCR text of Japanese documents.
 
-    Return ONLY valid JSON.
+        Return ONLY valid JSON.
 
-    RULES:
-    - Extract all information exactly as in the OCR text
-    - JSON keys must be simple Japanese words (no symbols, no merging)
-    - Keep values exactly as written
-    - If unclear, return ""
+        RULES:
+        - Extract all information exactly as in the OCR text
+        - JSON keys must be simple Japanese words
+        - Keep values exactly as written
+        - If unclear, return ""
 
-    STRUCTURE:
-    - Document-level fields (date, number, company, etc.) → top-level
-    - Table data → list of objects (rows)
+        TABLE RULES:
+        - Each row = one object
+        - 荷姿数量 is the size/form expression such as "270 × 43" or "230 × 78"
+        - 数量 is the count value such as "4" or "8"
+        - Never use "1" as 数量 if a clearer count (e.g. 4 or 8) exists in the same row
+        - 原反 and 加工賃 must belong to EACH row (not top-level)
+        - If 原反 / 加工賃 appear on the right side, assign them to the closest row
+        - Always assign visible numeric values (do not leave blank or output 0)
+        - Do not merge columns or labels
+        - Split fields if multiple labels appear together
 
-    TABLE RULES:
-    - Each row = one object
-    - 原反 and 加工賃 must belong to EACH row (not top-level)
-    - Assign 原反 / 加工賃 to the closest row on the right
-    - Always assign visible numeric values (do not leave blank or output 0)
-    - If multiple numbers exist, choose the closest one to that row
-    - Do not merge columns or labels
-    - Split fields if multiple labels appear together
-
-    OUTPUT:
-    - JSON only
-    """
+        OUTPUT:
+        - JSON only
+        """
     if prompt:
-        base = f"{base}\n\nAdditional extraction instructions:\n{prompt.strip()}"
+        base += f"\nAdditional extraction instructions:\n{prompt.strip()}\n"
 
-    return f"{base}\n\nOCR Text:\n{ocr_text}"
+    return f"{base}\nOCR Text:\n{ocr_text}"
 
 
 def extract_aoai_content(payload: Dict[str, Any]) -> str:
