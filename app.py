@@ -1,4 +1,6 @@
 import json
+import csv
+import io
 import logging
 import os
 import time
@@ -9,8 +11,8 @@ import requests
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import JSONResponse
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
+from requests import Response as RequestsResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -122,7 +124,7 @@ async def health() -> Dict[str, str]:
 async def process_document(
     file: UploadFile = File(...),
     prompt: Optional[str] = Form(default=""),
-) -> Dict[str, Any]:
+) -> Response:
     validate_required_env()
 
     if not file or not file.filename:
@@ -145,15 +147,20 @@ async def process_document(
     ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
 
-    data = {
-        "ocr_text": ocr_text,
-        "ai_result": ai_result
-    }
+    flat = flatten_json(ai_result)
+
+    tsv_output = dict_to_horizontal_tsv(flat)
+
+    # thêm BOM để Excel mở UTF-8 tiếng Nhật đẹp hơn
+    tsv_output = "\ufeff" + tsv_output
 
     return Response(
-        content=json.dumps(data, ensure_ascii=False, indent=2),
-        media_type="application/json"
-    )
+    content=tsv_output,
+    media_type="text/csv; charset=utf-8",
+    headers={
+        "Content-Disposition": "attachment; filename=result.csv"
+    }
+)
 
 
 def validate_required_env() -> None:
@@ -342,17 +349,15 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
     Extract as much structured information as possible from the OCR text and return ONLY valid JSON.
 
     REQUIREMENTS:
-    - JSON keys MUST be written in Japanese
-    - Return ONLY JSON (no explanation, no markdown)
-    - Do NOT include English keys
+    - All extracted data must be 100% same as in file's content, and written in Japanese
     - Do NOT include fields that are not present in the text
     - If a value is unclear, use empty string 
     - Read and extract carefully and exactly what is written in file's content
-    - You must read very carefully and correctly as same as in file for  数量 part
+    - You must read very carefully and correctly as same as in file for "数量" part
 
     RULES:
     - Keep values as close as possible to original text
-    - Normalize date as YYYY-MM-DD if possible
+    - Normalize date as YYYY/MM/DD if possible
     - Remove OCR noise
         """
     if prompt:
@@ -371,6 +376,46 @@ def extract_aoai_content(payload: Dict[str, Any]) -> str:
             {"response": payload},
         ) from exc
 
+def reorder_columns(data: Dict[str, Any]) -> list[str]:
+    all_keys = list(data.keys())
+
+    special_suffixes = ["原反", "加工賃"]
+
+    special_keys = [
+        k for k in all_keys
+        if any(k.endswith(suffix) for suffix in special_suffixes)
+    ]
+
+    normal_keys = [k for k in all_keys if k not in special_keys]
+
+    return normal_keys + special_keys
+
+def flatten_json(data: Dict[str, Any], parent_key: str = "", sep: str = "_") -> Dict[str, Any]:
+    items: Dict[str, Any] = {}
+
+    for k, v in data.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+
+        if isinstance(v, dict):
+            items.update(flatten_json(v, new_key, sep=sep))
+        elif isinstance(v, list):
+            # nếu list là danh sách object, gộp JSON string vào 1 cell
+            items[new_key] = json.dumps(v, ensure_ascii=False)
+        else:
+            items[new_key] = v
+
+    return items
+
+def dict_to_horizontal_tsv(data: Dict[str, Any]) -> str:
+    headers = reorder_columns(data)
+
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+
+    writer.writerow(headers)
+    writer.writerow([data.get(k, "") for k in headers])
+
+    return output.getvalue()
 
 def parse_json_safely(content: str) -> Any:
     try:
@@ -406,7 +451,7 @@ def strip_markdown_fences(text: str) -> str:
     return stripped
 
 
-def safe_json_or_text(response: Response) -> Any:
+def safe_json_or_text(response: RequestsResponse) -> Any:
     try:
         return response.json()
     except ValueError:
