@@ -28,7 +28,7 @@ class Config:
     DOCINT_ENDPOINT = os.getenv("DOCINT_ENDPOINT", "").rstrip("/")
     DOCINT_KEY = os.getenv("DOCINT_KEY", "")
     DOCINT_API_VERSION = os.getenv("DOCINT_API_VERSION", "2024-11-30")
-    DOCINT_MODEL_ID = os.getenv("DOCINT_MODEL_ID", "prebuilt-read")
+    DOCINT_MODEL_ID = os.getenv("DOCINT_MODEL_ID", "prebuilt-layout")
 
     AOAI_ENDPOINT = os.getenv("AOAI_ENDPOINT", "").rstrip("/")
     AOAI_KEY = os.getenv("AOAI_KEY", "")
