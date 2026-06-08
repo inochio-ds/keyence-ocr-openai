@@ -28,7 +28,7 @@ class Config:
     DOCINT_ENDPOINT = os.getenv("DOCINT_ENDPOINT", "").rstrip("/")
     DOCINT_KEY = os.getenv("DOCINT_KEY", "")
     DOCINT_API_VERSION = os.getenv("DOCINT_API_VERSION", "2024-11-30")
-    DOCINT_MODEL_ID = os.getenv("DOCINT_MODEL_ID", "prebuilt-layout")
+    DOCINT_MODEL_ID = os.getenv("DOCINT_MODEL_ID", "prebuilt-read")
 
     AOAI_ENDPOINT = os.getenv("AOAI_ENDPOINT", "").rstrip("/")
     AOAI_KEY = os.getenv("AOAI_KEY", "")
@@ -378,10 +378,8 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
     base = """
         You extract structured data from OCR text of Japanese documents.
 
-        Return ONLY valid JSON.
-
         RULES:
-        - Extract all visible data text content from file
+        - Read and Extract ALL VISIBLE data text content from file, also top-left side
         - Extract all information exactly as in the OCR text
         - JSON keys must be simple Japanese words
         - Keep values exactly as written
@@ -392,6 +390,7 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
         - 荷姿数量 is the size/form expression such as "270 × 43" or "230 × 78"
         - 数量 is the count value such as "4" or "8"
         - Never use "1" as 数量 if a clearer count (e.g. 4 or 8) exists in the same row
+        - 原反 and 加工賃 is a couple, and normally 原反 placed above 加工賃, which belong to a same row
         - 原反 and 加工賃 must belong to EACH row (not top-level)
         - If 原反 / 加工賃 appear on the right side, assign them to the closest row
         - Always assign visible numeric values (do not leave blank or output 0)
