@@ -340,30 +340,31 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
 
 
 def build_user_prompt(ocr_text: str, prompt: str) -> str:
-    base = """Extract structured information from the OCR text below and return valid JSON.
-    You are an AI that extracts structured data from OCR text of Japanese documents.
+    base = """
+        You extract structured data from OCR text of Japanese documents.
 
-    TASK:
-    Extract as much structured information as possible from the OCR text and return ONLY valid JSON.
-
-    REQUIREMENTS:
-    - All extracted data must be 100% same as in file's content, and written in Japanese
-    - Do NOT include fields that are not present in the text
-    - If a value is unclear, use empty string 
-    - Read and extract carefully and exactly what is written in file's content
-    - You must read very carefully and correctly as same as in file for "数量" part
+    Return ONLY valid JSON.
 
     RULES:
-    - Keep values as close as possible to original text
-    - Normalize date as YYYY/MM/DD if possible
-    - Remove OCR noise
-    - 原反 and 加工賃 must be fields inside each 明細 row, not top-level field
+    - JSON keys must be simple Japanese words
+    - Do not include symbols or merge multiple labels into one key
+    - Keep values exactly as in the original OCR text
+    - If unclear, return "" (empty string)
 
-    OUTPUT FORMAT RULES:
-    - JSON keys must be simple, clean Japanese words
-    - Do NOT include symbols like "", 「」, or punctuation in keys
-    - Each key must represent ONE field only (do not merge multiple labels)
-        """
+    STRUCTURE:
+    - Document-level fields (date, number, company, etc.) should be at top-level
+    - Table data must be returned as an array of objects (list of rows)
+
+    TABLE RULES:
+    - Each row in the table = one object in the list
+    - If multiple rows exist, output multiple objects
+    - 原反 and 加工賃 must belong to EACH row (not top-level)
+    - If 原反 and 加工賃 are located on the right side, assign them to the closest row
+    - Do not assign row values randomly
+
+    OUTPUT:
+    - Only JSON, no explanation
+    """
     if prompt:
         base = f"{base}\n\nAdditional extraction instructions:\n{prompt.strip()}"
 
