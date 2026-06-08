@@ -10,7 +10,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
-from requests import Response
+from fastapi.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -154,7 +154,6 @@ async def process_document(
         content=json.dumps(data, ensure_ascii=False, indent=2),
         media_type="application/json"
     )
-
 
 
 def validate_required_env() -> None:
