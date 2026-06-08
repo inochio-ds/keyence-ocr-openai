@@ -145,7 +145,16 @@ async def process_document(
     ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
 
-    return {"ocr_text": ocr_text, "ai_result": ai_result}
+    data = {
+        "ocr_text": ocr_text,
+        "ai_result": ai_result
+    }
+
+    return Response(
+        content=json.dumps(data, ensure_ascii=False, indent=2),
+        media_type="application/json"
+    )
+
 
 
 def validate_required_env() -> None:
