@@ -341,29 +341,31 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
 
 def build_user_prompt(ocr_text: str, prompt: str) -> str:
     base = """
-        You extract structured data from OCR text of Japanese documents.
+    You extract structured data from OCR text of Japanese documents.
 
     Return ONLY valid JSON.
 
     RULES:
-    - JSON keys must be simple Japanese words
-    - Do not include symbols or merge multiple labels into one key
-    - Keep values exactly as in the original OCR text
-    - If unclear, return "" (empty string)
+    - Extract all information exactly as in the OCR text
+    - JSON keys must be simple Japanese words (no symbols, no merging)
+    - Keep values exactly as written
+    - If unclear, return ""
 
     STRUCTURE:
-    - Document-level fields (date, number, company, etc.) should be at top-level
-    - Table data must be returned as an array of objects (list of rows)
+    - Document-level fields (date, number, company, etc.) → top-level
+    - Table data → list of objects (rows)
 
     TABLE RULES:
-    - Each row in the table = one object in the list
-    - If multiple rows exist, output multiple objects
+    - Each row = one object
     - 原反 and 加工賃 must belong to EACH row (not top-level)
-    - If 原反 and 加工賃 are located on the right side, assign them to the closest row
-    - Do not assign row values randomly
+    - Assign 原反 / 加工賃 to the closest row on the right
+    - Always assign visible numeric values (do not leave blank or output 0)
+    - If multiple numbers exist, choose the closest one to that row
+    - Do not merge columns or labels
+    - Split fields if multiple labels appear together
 
     OUTPUT:
-    - Only JSON, no explanation
+    - JSON only
     """
     if prompt:
         base = f"{base}\n\nAdditional extraction instructions:\n{prompt.strip()}"
