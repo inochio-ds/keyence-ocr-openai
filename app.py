@@ -170,29 +170,30 @@ async def process_document(
     )
 
 def fix_kakouhin(items, ocr_text):
-    # only extract larger numbers (more likely price/material)
-    numbers = re.findall(r'\d{4,6}', ocr_text)
+    # find "原反 xxxx" and "加工賃 xxxx"
+    pattern = re.findall(r'(原反|加工賃)\s*(\d{3,6})', ocr_text)
 
-    # filter obvious noise (postal codes like 8715, phone parts)
-    filtered = []
+    pairs = []
 
-    for n in numbers:
-        if n.startswith("0"):
-            continue
-        if int(n) < 1000:
-            continue
-        filtered.append(n)
+    temp = {}
 
-    # now use filtered values
-    if len(filtered) >= len(items) * 2:
-        tail = filtered[-(len(items) * 2):]
+    for label, value in pattern:
+        temp[label] = value
 
-        for i, item in enumerate(items):
-            if item.get("加工賃") in ["", "0", 0]:
-                item["加工賃"] = tail[i * 2 + 1]
+        if "原反" in temp and "加工賃" in temp:
+            pairs.append((temp["原反"], temp["加工賃"]))
+            temp = {}
+
+    # assign to rows
+    for i, item in enumerate(items):
+        if i < len(pairs):
+            genban, kakou = pairs[i]
 
             if item.get("原反") in ["", "0", 0]:
-                item["原反"] = tail[i * 2]
+                item["原反"] = genban
+
+            if item.get("加工賃") in ["", "0", 0]:
+                item["加工賃"] = kakou
 
     return items
 
