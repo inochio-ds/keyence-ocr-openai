@@ -1,6 +1,9 @@
 import json
 import csv
 import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from fastapi.responses import StreamingResponse
 import logging
 import os
 import time
@@ -147,20 +150,15 @@ async def process_document(
     ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
 
-    flat = flatten_json(ai_result)
+    xlsx_bytes = build_xlsx_from_ai_result(ai_result)
 
-    tsv_output = dict_to_horizontal_tsv(flat)
-
-    # thêm BOM để Excel mở UTF-8 tiếng Nhật đẹp hơn
-    tsv_output = "\ufeff" + tsv_output
-
-    return Response(
-    content=tsv_output,
-    media_type="text/csv; charset=utf-8",
-    headers={
-        "Content-Disposition": "attachment; filename=result.csv"
-    }
-)
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename=result.xlsx"
+        }
+    )
 
 
 def validate_required_env() -> None:
@@ -436,6 +434,91 @@ def clean_key(key: str) -> str:
            .replace("\t", "")
            .strip()
     )
+
+def split_summary_and_tables(data: dict, parent_key: str = ""):
+    summary = {}
+    tables = {}
+
+    for k, v in data.items():
+        key = f"{parent_key}_{k}" if parent_key else k
+
+        if isinstance(v, dict):
+            child_summary, child_tables = split_summary_and_tables(v, key)
+            summary.update(child_summary)
+            tables.update(child_tables)
+
+        elif isinstance(v, list) and v and all(isinstance(i, dict) for i in v):
+            tables[key] = v
+
+        else:
+            summary[key] = v
+
+    return summary, tables
+
+def write_vertical_summary(ws, summary: dict, start_row=1):
+    row = start_row
+    for k, v in summary.items():
+        ws.cell(row=row, column=1, value=k)
+        ws.cell(row=row, column=2, value=v)
+        row += 1
+    return row
+
+def write_table(ws, rows: list[dict], start_row: int):
+    if not rows:
+        return start_row
+
+    headers = list(rows[0].keys())
+
+    # ưu tiên 原反 / 加工賃 về bên phải
+    special = ["原反", "加工賃"]
+    normal_headers = [h for h in headers if h not in special]
+    special_headers = [h for h in special if h in headers]
+    headers = normal_headers + special_headers
+
+    # header row
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=start_row, column=col_idx, value=h)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F6D8C")
+        cell.alignment = Alignment(horizontal="center")
+
+    # data rows
+    for r_idx, item in enumerate(rows, start=start_row + 1):
+        for c_idx, h in enumerate(headers, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=item.get(h, ""))
+
+    return start_row + len(rows) + 2
+
+def build_xlsx_from_ai_result(ai_result: dict) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "結果"
+
+    summary, tables = split_summary_and_tables(ai_result)
+
+    current_row = 1
+    current_row = write_vertical_summary(ws, summary, start_row=current_row)
+    current_row += 2
+
+    for table_name, rows in tables.items():
+        ws.cell(row=current_row, column=1, value=table_name)
+        ws.cell(row=current_row, column=1).font = Font(bold=True)
+        current_row += 1
+        current_row = write_table(ws, rows, start_row=current_row)
+
+    # auto width đơn giản
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            value = str(cell.value) if cell.value is not None else ""
+            max_length = max(max_length, len(value))
+        ws.column_dimensions[col_letter].width = min(max_length + 2, 40)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
 
 def parse_json_safely(content: str) -> Any:
     try:
