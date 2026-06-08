@@ -359,6 +359,11 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
     - Keep values as close as possible to original text
     - Normalize date as YYYY/MM/DD if possible
     - Remove OCR noise
+
+    OUTPUT FORMAT RULES:
+    - JSON keys must be simple, clean Japanese words
+    - Do NOT include symbols like "", 「」, or punctuation in keys
+    - Each key must represent ONE field only (do not merge multiple labels)
         """
     if prompt:
         base = f"{base}\n\nAdditional extraction instructions:\n{prompt.strip()}"
@@ -394,6 +399,7 @@ def flatten_json(data: Dict[str, Any], parent_key: str = "", sep: str = "_") -> 
     items: Dict[str, Any] = {}
 
     for k, v in data.items():
+        k = clean_key(k)
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
 
         if isinstance(v, dict):
@@ -420,6 +426,16 @@ def dict_to_horizontal_tsv(data: Dict[str, Any]) -> str:
     writer.writerow([data.get(k, "") for k in headers])
 
     return output.getvalue()
+
+def clean_key(key: str) -> str:
+    return (
+        key.replace('"', '')
+           .replace("'", "")
+           .replace(" ", "")
+           .replace("\n", "")
+           .replace("\t", "")
+           .strip()
+    )
 
 def parse_json_safely(content: str) -> Any:
     try:
