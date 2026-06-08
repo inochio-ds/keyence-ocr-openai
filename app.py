@@ -348,6 +348,7 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
     - Do NOT include fields that are not present in the text
     - If a value is unclear, use empty string 
     - Read and extract carefully and exactly what is written in file's content
+    - You must read very carefully and correctly as same as in file for  数量 part
 
     RULES:
     - Keep values as close as possible to original text
