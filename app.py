@@ -387,6 +387,8 @@ def build_user_prompt(ocr_text: str, prompt: str) -> str:
         - Split fields if multiple labels appear together
 
         OUTPUT:
+        - The result MUST be a JSON object (not a list)
+        - Table data must be inside an array field (e.g. 明細)
         - JSON only
         """
     if prompt:
