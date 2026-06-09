@@ -153,6 +153,12 @@ async def process_document(
 
     table_text = extract_table_section(ocr_text)
     ai_result = run_aoai_extraction(ocr_text=table_text, prompt=clean_prompt)
+    
+    items = ai_result.get("明細", [])
+
+    # fixed_items = fix_kakouhin(items, ocr_text)
+
+    # ai_result["明細"] = fixed_items
 
     xlsx_bytes = build_xlsx_from_ai_result(ai_result)
 
@@ -163,6 +169,34 @@ async def process_document(
             "Content-Disposition": "attachment; filename=result.xlsx"
         }
     )
+
+# def fix_kakouhin(items, ocr_text):
+    # find "原反 xxxx" and "加工賃 xxxx"
+    pattern = re.findall(r'(原反|加工賃)\s*(\d{3,6})', ocr_text)
+
+    pairs = []
+
+    temp = {}
+
+    for label, value in pattern:
+        temp[label] = value
+
+        if "原反" in temp and "加工賃" in temp:
+            pairs.append((temp["原反"], temp["加工賃"]))
+            temp = {}
+
+    # assign to rows
+    for i, item in enumerate(items):
+        if i < len(pairs):
+            genban, kakou = pairs[i]
+
+            if item.get("原反") in ["", "0", 0]:
+                item["原反"] = genban
+
+            if item.get("加工賃") in ["", "0", 0]:
+                item["加工賃"] = kakou
+
+    return items
 
 def validate_required_env() -> None:
     required = {
