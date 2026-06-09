@@ -157,7 +157,7 @@ async def process_document(
 
     # fixed_items = fix_kakouhin(items, ocr_text)
 
-    ai_result["明細"] = fixed_items
+    # ai_result["明細"] = fixed_items
 
     xlsx_bytes = build_xlsx_from_ai_result(ai_result)
 
