@@ -155,7 +155,7 @@ async def process_document(
     
     items = ai_result.get("明細", [])
 
-    fixed_items = fix_kakouhin(items, ocr_text)
+    # fixed_items = fix_kakouhin(items, ocr_text)
 
     ai_result["明細"] = fixed_items
 
@@ -169,7 +169,7 @@ async def process_document(
         }
     )
 
-def fix_kakouhin(items, ocr_text):
+# def fix_kakouhin(items, ocr_text):
     # find "原反 xxxx" and "加工賃 xxxx"
     pattern = re.findall(r'(原反|加工賃)\s*(\d{3,6})', ocr_text)
 
