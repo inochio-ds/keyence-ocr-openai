@@ -151,14 +151,14 @@ async def process_document(
     ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
     print(ocr_text)
 
-    table_text = extract_table_section(ocr_text)
-    ai_result = run_aoai_extraction(ocr_text=table_text, prompt=clean_prompt)
+    ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
     
     items = ai_result.get("明細", [])
 
     # fixed_items = fix_kakouhin(items, ocr_text)
 
     # ai_result["明細"] = fixed_items
+    
 
     xlsx_bytes = build_xlsx_from_ai_result(ai_result)
 
