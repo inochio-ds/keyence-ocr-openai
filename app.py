@@ -225,7 +225,7 @@ async def process_document(
 
     elif output_format == "csv":
         data = flatten_json(ai_result)
-        csv_text = dict_to_csv(data)
+        csv_text = dict_to_csv_vertical(data)
 
         # ✅ Add UTF-8 BOM for Excel
         csv_text = "\ufeff" + csv_text
@@ -451,6 +451,22 @@ def build_user_prompt(ocr_text: str, user_prompt: str) -> str:
             """
     return base + "\nUser instructions:\n" + user_prompt + "\n\nOCR:\n" + ocr_text
 
+def dict_to_csv_vertical(data: Dict[str, Any]) -> str:
+    output = io.StringIO()
+
+    writer = csv.writer(
+        output,
+        delimiter=",",
+        quotechar='"',
+        quoting=csv.QUOTE_MINIMAL,
+        lineterminator="\r\n"
+    )
+
+    # ✅ write row-by-row (vertical)
+    for key, value in data.items():
+        writer.writerow([key, value])
+
+    return output.getvalue()
 
 def extract_aoai_content(payload: Dict[str, Any]) -> str:
     try:
@@ -492,24 +508,6 @@ def flatten_json(data: Dict[str, Any], parent_key: str = "", sep: str = "_") -> 
             items[new_key] = v
 
     return items
-
-def dict_to_csv(data: Dict[str, Any]) -> str:
-    headers = reorder_columns(data)
-
-    output = io.StringIO()
-
-    writer = csv.writer(
-        output,
-        delimiter=",",          # ✅ IMPORTANT
-        quotechar='"',
-        quoting=csv.QUOTE_MINIMAL,
-        lineterminator="\r\n"   # ✅ IMPORTANT for Excel
-    )
-
-    writer.writerow(headers)
-    writer.writerow([data.get(k, "") for k in headers])
-
-    return output.getvalue()
 
 def clean_key(key: str) -> str:
     return (
