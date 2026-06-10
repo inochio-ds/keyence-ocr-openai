@@ -193,7 +193,7 @@ async def process_document(
         upload_filename, content_type, output_format, output_filename,
         "txt_file" if txt_prompt else "query_param" if prompt else "none"
     )
-    print(f"[PROMPT] user_prompt: {user_prompt!r}")
+    logging.info("[PROMPT] user_prompt: %s", {user_prompt})
 
     ocr_text = run_document_intelligence_ocr(
         file_bytes=file_bytes,
@@ -205,8 +205,8 @@ async def process_document(
     ai_result["ファイル参考"] = decoded_filename
     
 
-    print("ocr_text: ", ocr_text)
-    print("ai_result: ", ai_result)
+    logging.info("ocr_text: %s", ocr_text)
+    logging.info("ai_result: %s", ai_result)
 
     if output_format == "json":
         return Response(
