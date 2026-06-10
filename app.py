@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 import logging
 import os
 import time
+from email.header import decode_header
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -14,7 +15,7 @@ import requests
 import uvicorn
 from dotenv import load_dotenv
 import re
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from requests import Response as RequestsResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -124,79 +125,126 @@ async def health() -> Dict[str, str]:
     }
 
 
+def _decode_header_value(raw: Optional[str]) -> str:
+    """Re-decode header value that may have been mis-decoded as latin-1 but is actually UTF-8."""
+    if not raw:
+        return ""
+    try:
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return raw
+
+
 @app.post("/process")
 async def process_document(
+    request: Request,
     file: UploadFile = File(...),
-    prompt: Optional[str] = Form(default=""),
+    prompt_file: Optional[UploadFile] = File(default=None),
+    format: Optional[str] = Query(default=None),
+    prompt: Optional[str] = Query(default=None),
+    filename: Optional[str] = Query(default=None),
 ) -> Response:
     validate_required_env()
 
     if not file or not file.filename:
         raise APIError("No file provided.", 400)
 
-    filename = os.path.basename(file.filename)
+    upload_filename = os.path.basename(file.filename)
     content_type = file.content_type or "application/octet-stream"
 
-    if not is_allowed_file(filename, content_type):
+    if not is_allowed_file(upload_filename, content_type):
         raise APIError("Unsupported file type. Allowed: PDF or image formats.", 400)
 
     file_bytes = await file.read()
     if not file_bytes:
         raise APIError("Uploaded file is empty.", 400)
 
-    clean_prompt = (prompt or "").strip()
+    # Read prompt from uploaded .txt file if provided
+    txt_prompt = ""
+    if prompt_file and prompt_file.filename:
+        txt_ext = os.path.splitext(prompt_file.filename.lower())[1]
+        if txt_ext != ".txt":
+            raise APIError("prompt_file must be a .txt file.", 400)
+        txt_bytes = await prompt_file.read()
+        txt_prompt = txt_bytes.decode("utf-8", errors="replace").strip()
 
-    logging.info("Processing request for file=%s, content_type=%s", filename, content_type)
+    # Read headers for format only (prompt via file or query param)
+    x_format = _decode_header_value(request.headers.get("x-format"))
 
-    ocr_text = run_document_intelligence_ocr(file_bytes=file_bytes, content_type=content_type)
-    print(ocr_text)
+    # Determine output format: explicit param > filename extension > header > default
+    output_filename = filename
+    ext_format: Optional[str] = None
+    if output_filename:
+        ext = os.path.splitext(output_filename.lower())[1].lstrip(".")
+        if ext in ("json", "csv", "xlsx", "txt"):
+            ext_format = ext
 
-    ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=clean_prompt)
-    
-    items = ai_result.get("明細", [])
+    output_format = (format or ext_format or x_format or "xlsx").lower()
 
-    # fixed_items = fix_kakouhin(items, ocr_text)
+    # Priority: txt file > query param prompt
+    user_prompt = (txt_prompt or prompt or "").strip()
 
-    # ai_result["明細"] = fixed_items
-    
+    # Build the download filename
+    if not output_filename:
+        output_filename = f"result.{output_format}"
 
-    xlsx_bytes = build_xlsx_from_ai_result(ai_result)
+    logging.info(
+        "Processing request for file=%s, content_type=%s, format=%s, output_filename=%s, prompt_source=%s",
+        upload_filename, content_type, output_format, output_filename,
+        "txt_file" if txt_prompt else "query_param" if prompt else "none"
+    )
+    print(f"[PROMPT] user_prompt: {user_prompt!r}")
 
-    return StreamingResponse(
-        io.BytesIO(xlsx_bytes),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": "attachment; filename=result.xlsx"
-        }
+    ocr_text = run_document_intelligence_ocr(
+        file_bytes=file_bytes,
+        content_type=content_type
     )
 
-# def fix_kakouhin(items, ocr_text):
-    # find "原反 xxxx" and "加工賃 xxxx"
-    pattern = re.findall(r'(原反|加工賃)\s*(\d{3,6})', ocr_text)
+    ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=user_prompt)
+    decoded_filename = decode_mime_filename(file.filename)
+    ai_result["ファイル参考"] = decoded_filename
+    
 
-    pairs = []
+    print("ocr_text: ", ocr_text)
+    print("ai_result: ", ai_result)
 
-    temp = {}
+    if output_format == "json":
+        return Response(
+            content=json.dumps(ai_result, ensure_ascii=False, indent=2),
+            media_type="application/json; charset=utf-8",
+        )
 
-    for label, value in pattern:
-        temp[label] = value
+    elif output_format == "txt":
+        lines = [f"{k}: {v}" for k, v in ai_result.items()]
+        txt_content = "\n".join(lines)
+        return Response(
+            content=txt_content,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={output_filename}"},
+        )
 
-        if "原反" in temp and "加工賃" in temp:
-            pairs.append((temp["原反"], temp["加工賃"]))
-            temp = {}
+    elif output_format == "csv":
+        data = flatten_json(ai_result)
+        csv_text = dict_to_csv(data)
 
-    # assign to rows
-    for i, item in enumerate(items):
-        if i < len(pairs):
-            genban, kakou = pairs[i]
+        # ✅ Add UTF-8 BOM for Excel
+        csv_text = "\ufeff" + csv_text
 
-            if item.get("原反") in ["", "0", 0]:
-                item["原反"] = genban
+        return Response(
+            content=csv_text,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={output_filename}"},
+        )
 
-            if item.get("加工賃") in ["", "0", 0]:
-                item["加工賃"] = kakou
 
-    return items
+    else:
+        xlsx_bytes = build_xlsx_from_ai_result(ai_result)
+        return StreamingResponse(
+            io.BytesIO(xlsx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={output_filename}"},
+        )
+
 
 def validate_required_env() -> None:
     required = {
@@ -210,6 +258,18 @@ def validate_required_env() -> None:
     if missing:
         raise APIError("Missing required environment variables.", 500, {"missing": missing})
 
+def decode_mime_filename(filename: str) -> str:
+    try:
+        decoded_parts = decode_header(filename)
+        decoded_string = ""
+        for part, encoding in decoded_parts:
+            if isinstance(part, bytes):
+                decoded_string += part.decode(encoding or "utf-8", errors="replace")
+            else:
+                decoded_string += part
+        return decoded_string
+    except Exception:
+        return filename
 
 def is_allowed_file(filename: str, content_type: str) -> bool:
     allowed_mime_prefixes = ["image/"]
@@ -222,11 +282,6 @@ def is_allowed_file(filename: str, content_type: str) -> bool:
     if content_type in allowed_mimes:
         return True
     return any(content_type.startswith(prefix) for prefix in allowed_mime_prefixes)
-
-def extract_table_section(text):
-    if "下記の通り注文致します" in text:
-        return text.split("下記の通り注文致します")[-1]
-    return text
 
 def run_document_intelligence_ocr(file_bytes: bytes, content_type: str) -> str:
     url = (
@@ -339,7 +394,7 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
         "Content-Type": "application/json",
     }
 
-    user_instruction = build_user_prompt(ocr_text=ocr_text, prompt=prompt)
+    user_instruction = build_user_prompt(ocr_text=ocr_text, user_prompt=prompt)
     body = {
         "messages": [
             {"role": "system", "content": "Return JSON only"},
@@ -379,39 +434,22 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
 
     return parsed
 
-
-def build_user_prompt(ocr_text: str, prompt: str) -> str:
+def build_user_prompt(ocr_text: str, user_prompt: str) -> str:
     base = """
-        You extract structured data from OCR text of Japanese documents.
+            Extract structured data from the OCR text.
 
-        RULES:
-        - Read and Extract ALL VISIBLE data text content from file, also top-left side
-        - Extract all information exactly as in the OCR text
-        - JSON keys must be simple Japanese words
-        - Keep values exactly as written
-        - If unclear, return ""
-
-        TABLE RULES:
-        - Each row = one object
-        - 荷姿数量 is the size/form expression such as "270 × 43" or "230 × 78"
-        - 数量 is the count value such as "4" or "8"
-        - Never use "1" as 数量 if a clearer count (e.g. 4 or 8) exists in the same row
-        - 原反 and 加工賃 is a couple, and normally 原反 placed above 加工賃, which belong to a same row
-        - 原反 and 加工賃 must belong to EACH row (not top-level)
-        - If 原反 / 加工賃 appear on the right side, assign them to the closest row
-        - Always assign visible numeric values (do not leave blank or output 0)
-        - Do not merge columns or labels
-        - Split fields if multiple labels appear together
-
-        OUTPUT:
-        - The result MUST be a JSON object (not a list)
-        - Table data must be inside an array field (e.g. 明細)
-        - JSON only
-        """
-    if prompt:
-        base += f"\nAdditional extraction instructions:\n{prompt.strip()}\n"
-
-    return f"{base}\nOCR Text:\n{ocr_text}"
+            Rules:
+            - Keep values exactly as written in OCR
+            - JSON keys should be simple Japanese words
+            - Do not merge multiple labels into one field
+            - If unclear, return ""
+            - Return only valid JSON
+            - DO NOT put important fields into 補足 if they can be inferred
+            - Only use 補足 for truly irrelevant or unknown text
+            - Keep all values as-is
+            - Take all data OCR extracted
+            """
+    return base + "\nUser instructions:\n" + user_prompt + "\n\nOCR:\n" + ocr_text
 
 
 def extract_aoai_content(payload: Dict[str, Any]) -> str:
@@ -455,15 +493,18 @@ def flatten_json(data: Dict[str, Any], parent_key: str = "", sep: str = "_") -> 
 
     return items
 
-def dict_to_horizontal_tsv(data: Dict[str, Any]) -> str:
+def dict_to_csv(data: Dict[str, Any]) -> str:
     headers = reorder_columns(data)
 
     output = io.StringIO()
 
-    # ✅ tell Excel separator is TAB
-    output.write("sep=\t\n")
-
-    writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+    writer = csv.writer(
+        output,
+        delimiter=",",          # ✅ IMPORTANT
+        quotechar='"',
+        quoting=csv.QUOTE_MINIMAL,
+        lineterminator="\r\n"   # ✅ IMPORTANT for Excel
+    )
 
     writer.writerow(headers)
     writer.writerow([data.get(k, "") for k in headers])
@@ -530,8 +571,13 @@ def write_table(ws, rows: list[dict], start_row: int):
     # data rows
     for r_idx, item in enumerate(rows, start=start_row + 1):
         for c_idx, h in enumerate(headers, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=item.get(h, ""))
+            value = item.get(h, "")
 
+            if isinstance(value, list):
+                value = ", ".join(str(v) for v in value)
+
+            ws.cell(row=r_idx, column=c_idx, value=value)
+            
     return start_row + len(rows) + 2
 
 def build_xlsx_from_ai_result(ai_result: dict) -> bytes:
@@ -608,4 +654,4 @@ def safe_json_or_text(response: RequestsResponse) -> Any:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("app:app", host="127.0.0.1", port=port, reload=True, http="httptools")
