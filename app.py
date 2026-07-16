@@ -142,6 +142,7 @@ async def process_document(
     decoded_filename = decode_mime_filename(file.filename)
     logging.info(f"OCR chars = {ocr_text}")
     logging.info(f"OCR length = {len(ocr_text)} chars")
+    
 
     # Always call GPT: backend handles table rows; GPT supplies non-table dynamic fields.
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=user_prompt)
