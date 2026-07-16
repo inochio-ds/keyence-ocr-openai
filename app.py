@@ -135,7 +135,9 @@ async def process_document(
         upload_filename, content_type, output_format, output_filename,
         "txt_file" if txt_prompt else "query_param" if prompt else "none",
     )
-    logging.info("[PROMPT] user_prompt: %s", {user_prompt})
+    # logging.info("[PROMPT] user_prompt: %s", {user_prompt})
+    logging.info(f"OCR chars = {ocr_text}")
+    logging.info(f"OCR length = {len(ocr_text)} chars")
 
     analyze_result = run_document_intelligence_analyze(file_bytes=file_bytes, content_type=content_type)
     ocr_text = (analyze_result.get("content") or "").strip()
@@ -161,8 +163,6 @@ async def process_document(
                 if key not in HORIZONTAL_HEADERS and key not in extra_headers and key not in row_dynamic_headers:
                     row_dynamic_headers.append(key)
         output_headers = HORIZONTAL_HEADERS + [h for h in extra_headers if h not in HORIZONTAL_HEADERS] + row_dynamic_headers
-        logging.info(f"OCR chars = {ocr_text}")
-        logging.info(f"OCR length = {len(ocr_text)} chars")
         logging.info("Using horizontal order-detail rows with normalized GPT extra columns. rows=%s extra_cols=%s", len(horizontal_rows), len(extra_headers))
         logging.info("extra_headers=%s", extra_headers)
         logging.info("output_headers=%s", output_headers)
