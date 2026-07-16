@@ -141,8 +141,7 @@ async def process_document(
     ocr_text = (analyze_result.get("content") or "").strip()
     decoded_filename = decode_mime_filename(file.filename)
     logging.info(f"OCR chars = {ocr_text}")
-    logging.info(f"OCR length = {len(ocr_text)} chars")
-    
+    logging.info(f"OCR length = {len(ocr_text)} chars.") 
 
     # Always call GPT: backend handles table rows; GPT supplies non-table dynamic fields.
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=user_prompt)
@@ -167,6 +166,7 @@ async def process_document(
         logging.info("Using horizontal order-detail rows with normalized GPT extra columns. rows=%s extra_cols=%s", len(horizontal_rows), len(extra_headers))
         logging.info("extra_headers=%s", extra_headers)
         logging.info("output_headers=%s", output_headers)
+        
         return build_response(horizontal_rows, output_headers, output_format, output_filename, sheet_name="注文明細")
 
     logging.info("No order-detail table detected. Using GPT dynamic horizontal rows")
