@@ -136,12 +136,12 @@ async def process_document(
         "txt_file" if txt_prompt else "query_param" if prompt else "none",
     )
     # logging.info("[PROMPT] user_prompt: %s", {user_prompt})
-    logging.info(f"OCR chars = {ocr_text}")
-    logging.info(f"OCR length = {len(ocr_text)} chars")
 
     analyze_result = run_document_intelligence_analyze(file_bytes=file_bytes, content_type=content_type)
     ocr_text = (analyze_result.get("content") or "").strip()
     decoded_filename = decode_mime_filename(file.filename)
+    logging.info(f"OCR chars = {ocr_text}")
+    logging.info(f"OCR length = {len(ocr_text)} chars")
 
     # Always call GPT: backend handles table rows; GPT supplies non-table dynamic fields.
     ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=user_prompt)
