@@ -144,34 +144,82 @@ async def process_document(
     logging.info(f"OCR length = {len(ocr_text)} chars.") 
 
     # Always call GPT: backend handles table rows; GPT supplies non-table dynamic fields.
-    ai_result = run_aoai_extraction(ocr_text=ocr_text, prompt=user_prompt)
-    horizontal_rows = extract_order_rows_from_read_lines(analyze_result, decoded_filename)
+    
+    horizontal_rows = extract_order_rows_from_read_lines(
+        analyze_result,
+        decoded_filename
+    )
 
     if horizontal_rows:
-        horizontal_rows, extra_headers = enrich_order_rows_with_gpt_columns(horizontal_rows, ai_result)
+        ai_result = run_aoai_extraction_by_blocks(
+            ocr_text=ocr_text,
+            prompt=user_prompt
+        )
+
+        horizontal_rows, extra_headers = enrich_order_rows_with_gpt_columns(
+            horizontal_rows,
+            ai_result
+        )
+
         horizontal_rows = normalize_delivery_columns(horizontal_rows)
 
-        # Do not output GPT-inferred 税額 unless the OCR actually contains a 税額 label.
         if "税額" in extra_headers and "税額" not in ocr_text:
             extra_headers.remove("税額")
             for row in horizontal_rows:
                 row.pop("税額", None)
 
-        row_dynamic_headers: List[str] = []
+        row_dynamic_headers = []
         for row in horizontal_rows:
             for key in row.keys():
-                if key not in HORIZONTAL_HEADERS and key not in extra_headers and key not in row_dynamic_headers:
+                if (
+                    key not in HORIZONTAL_HEADERS
+                    and key not in extra_headers
+                    and key not in row_dynamic_headers
+                ):
                     row_dynamic_headers.append(key)
-        output_headers = HORIZONTAL_HEADERS + [h for h in extra_headers if h not in HORIZONTAL_HEADERS] + row_dynamic_headers
-        logging.info("Using horizontal order-detail rows with normalized GPT extra columns. rows=%s extra_cols=%s", len(horizontal_rows), len(extra_headers))
+
+        output_headers = (
+            HORIZONTAL_HEADERS
+            + [h for h in extra_headers if h not in HORIZONTAL_HEADERS]
+            + row_dynamic_headers
+        )
+
+        logging.info(
+            "Using horizontal order-detail rows with normalized GPT extra columns. rows=%s extra_cols=%s",
+            len(horizontal_rows),
+            len(extra_headers)
+        )
         logging.info("extra_headers=%s", extra_headers)
         logging.info("output_headers=%s", output_headers)
-        
-        return build_response(horizontal_rows, output_headers, output_format, output_filename, sheet_name="注文明細")
 
+        return build_response(
+            horizontal_rows,
+            output_headers,
+            output_format,
+            output_filename,
+            sheet_name="注文明細"
+        )
+
+    # fallback cho file không phải CI table
     logging.info("No order-detail table detected. Using GPT dynamic horizontal rows")
-    generic_rows, generic_headers = build_generic_dynamic_horizontal(ai_result, decoded_filename)
-    return build_response(generic_rows, generic_headers, output_format, output_filename, sheet_name="抽出結果")
+
+    ai_result = run_aoai_extraction_by_blocks(
+        ocr_text=ocr_text,
+        prompt=user_prompt
+    )
+
+    generic_rows, generic_headers = build_generic_dynamic_horizontal(
+        ai_result,
+        decoded_filename
+    )
+
+    return build_response(
+        generic_rows,
+        generic_headers,
+        output_format,
+        output_filename,
+        sheet_name="抽出結果"
+    )
 
 
 # -----------------------------
@@ -333,6 +381,84 @@ def get_ocr_lines(analyze_result: dict) -> List[dict]:
 
 def page_text(page_lines: List[dict]) -> str:
     return " ".join(l["text"] for l in sorted(page_lines, key=lambda x: (x["y"], x["x"])))
+
+def split_ocr_into_blocks(ocr_text: str) -> List[Dict[str, str]]:
+    text = (ocr_text or "").strip()
+    blocks = []
+
+    if not text:
+        return []
+
+    # 1. Split by Japanese customs section markers: < 01 欄>, <02欄>, ...
+    section_pattern = re.compile(r"<\s*(\d{1,2})\s*欄\s*>")
+    matches = list(section_pattern.finditer(text))
+
+    if matches:
+        # common part before first section
+        common = text[:matches[0].start()].strip()
+        if common:
+            blocks.append({
+                "name": "common",
+                "suffix": "",
+                "text": common
+            })
+
+        for idx, m in enumerate(matches):
+            raw_no = m.group(1)
+            suffix = str(int(raw_no))
+            start = m.start()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            block_text = text[start:end].strip()
+
+            pay_marker = "リアルタイム口座振替完了通知情報"
+            if pay_marker in block_text:
+                before, after = block_text.split(pay_marker, 1)
+                if before.strip():
+                    blocks.append({
+                        "name": f"section_{suffix}",
+                        "suffix": suffix,
+                        "text": before.strip()
+                    })
+                blocks.append({
+                    "name": "payment",
+                    "suffix": "",
+                    "text": pay_marker + "\n" + after.strip()
+                })
+            else:
+                blocks.append({
+                    "name": f"section_{suffix}",
+                    "suffix": suffix,
+                    "text": block_text
+                })
+
+        return blocks
+
+    # 2. Split by page markers like "1 / 3", "2 / 3", etc.
+    page_pattern = re.compile(r"(?m)^\s*(\d+)\s*/\s*(\d+)\s*$")
+    page_matches = list(page_pattern.finditer(text))
+
+    if len(page_matches) >= 2:
+        for idx, m in enumerate(page_matches):
+            page_no = m.group(1)
+            start = m.start()
+            end = page_matches[idx + 1].start() if idx + 1 < len(page_matches) else len(text)
+            blocks.append({
+                "name": f"page_{page_no}",
+                "suffix": "",
+                "text": text[start:end].strip()
+            })
+        return blocks
+
+    # 3. Fallback: split by character size to avoid one huge GPT call
+    max_chars = 2500
+    for idx in range(0, len(text), max_chars):
+        blocks.append({
+            "name": f"chunk_{idx // max_chars + 1}",
+            "suffix": "",
+            "text": text[idx:idx + max_chars].strip()
+        })
+
+    return blocks
 
 
 def extract_document_page_label(page_lines: List[dict]) -> str:
@@ -619,6 +745,56 @@ def should_skip_gpt_extra_header(base_key: str) -> bool:
 
     return False
 
+def is_bad_key(key: str) -> bool:
+    k = str(key).strip()
+
+    if not k:
+        return True
+
+    # key toàn số / tiền / đơn vị
+    if re.fullmatch(r"[¥￥]?[0-9,.\s]+(?:%|MT|KG|KGM|本|枚)?(?:_\d+)*", k):
+        return True
+
+    # mã số dài
+    if re.fullmatch(r"\d{8,}(?:_\d+)*", k):
+        return True
+
+    # value tiếng Anh/tên công ty bị biến thành key
+    normalized = k.replace("_", "").replace(" ", "").upper()
+    if normalized in {
+        "INOCHIOMIRAICO.,LTD.",
+        "INOCHIOFARMTOYOHASHI",
+        "FREE",
+    }:
+        return True
+
+    # một chữ cái + suffix, thường là value chứ không phải label: S_2, F_1...
+    if re.fullmatch(r"[A-Z]_\d+(?:_\d+)?", k):
+        return True
+
+    return False
+
+def clean_merged_fields(data: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = dict(data)
+
+    for key, value in list(cleaned.items()):
+        if not key.startswith("蔵置種別_"):
+            continue
+
+        text = str(value or "")
+
+        if "運賃按分" in text:
+            suffix = key.replace("蔵置種別_", "")
+
+            before = text.split("運賃按分", 1)[0].strip()
+            cleaned[key] = before
+
+            freight_key = f"運賃按分_{suffix}"
+            if freight_key not in cleaned or not cleaned.get(freight_key):
+                cleaned[freight_key] = ""
+
+    return cleaned
+
 
 def extract_delivery_info_from_page(page_lines: List[dict]) -> Dict[str, str]:
     """
@@ -829,6 +1005,64 @@ def get_page_column_profile(page_lines: List[dict]) -> dict:
         profile["order_x"] = profile["order_x"] or page_w * 0.80
         profile["due_x"] = profile["due_x"] or page_w * 0.90
     return profile
+
+
+def build_block_extraction_prompt(block_text: str, block_name: str, suffix: str, user_prompt: str) -> str:
+    suffix_rule = ""
+    if suffix:
+        suffix_rule = f"""
+        This block is one repeated information group.
+        Append _{suffix} to every extracted field name.
+
+        Examples:
+        - 品名 -> 品名_{suffix}
+        - 税表番号 -> 税表番号_{suffix}
+        - 申告価格 -> 申告価格_{suffix}
+        - 原産地 -> 原産地_{suffix}
+
+        If the same label appears multiple times inside this block, use:
+        - ラベル_{suffix}_1
+        - ラベル_{suffix}_2
+
+        Do not use ラベル_1 or ラベル_2 alone inside this block.
+        """
+
+    return f"""
+        Extract structured data from this OCR block.
+
+        Rules:
+        - Return only one valid JSON object.
+        - Extract visible label-value pairs.
+        - A JSON key must be a visible label or heading from OCR.
+        - Do not create a JSON key from a standalone value.
+        - Do not create keys from company names, amounts, dates, codes, or plain numbers unless they are OCR labels.
+        - If text is a value without a clear label, attach it to the nearest preceding visible label.
+        - Do not omit visible labeled values.
+        - Do not summarize.
+        - Do not merge unrelated labels into one field.
+        - If a visible label has no clear value, output that key with "".
+        - Keep values exactly as written in OCR.
+        - Preserve symbols such as ¥, %, [], /, -, =<.
+        - Do not output Markdown or explanation.
+        - A JSON key must be an OCR label, not an OCR value.
+        - Do not create keys from company names, numbers, amounts, dates, product names, addresses, or standalone values.
+        - If a value has no clear label, attach it to the nearest previous label.
+        - Do not split one OCR label into multiple keys.
+        - For example, if OCR label is 事前教示(分類)(原産地), the JSON key must be 事前教示(分類)(原産地)_N, not 事前教示_N, 分類_N, 原産地_N.
+        - Do not truncate values.
+        - If a product name contains symbols such as =<, %, commas, or periods, keep the full string. Example: POTASSIUM SULPHATE, CONTENT. =< 52 % must not be shortened.
+
+        {suffix_rule}
+
+        User instructions:
+        {user_prompt}
+
+        Block name:
+        {block_name}
+
+        OCR block:
+        {block_text}
+        """ 
 
 
 def is_header_line(text: str) -> bool:
@@ -1321,6 +1555,125 @@ def run_aoai_extraction(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
         raise APIError("AI output must be a JSON object.", 502, {"type": type(parsed).__name__})
     return parsed
 
+def run_aoai_extraction_by_blocks(ocr_text: str, prompt: str = "") -> Dict[str, Any]:
+    blocks = split_ocr_into_blocks(ocr_text)
+    merged: Dict[str, Any] = {}
+
+    logging.info("OCR block count = %s", len(blocks))
+
+    for block in blocks:
+        block_name = block["name"]
+        suffix = block.get("suffix", "")
+        block_text = block["text"]
+
+        if not block_text.strip():
+            continue
+
+        logging.info(
+            "Extracting OCR block with GPT. block=%s suffix=%s chars=%s",
+            block_name,
+            suffix,
+            len(block_text)
+        )
+
+        block_result = run_aoai_extraction_single_block(
+            block_text=block_text,
+            block_name=block_name,
+            suffix=suffix,
+            prompt=prompt
+        )
+
+        flat = flatten_json(block_result)
+        flat = {k: v for k, v in flat.items() if not is_bad_key(k)}
+
+        for k, v in flat.items():
+            if k not in merged or merged.get(k) in ("", None):
+                merged[k] = v
+            else:
+                # Avoid overwriting an existing non-empty field
+                alt_key = make_unique_key(k, merged)
+                merged[alt_key] = v
+
+    merged = clean_merged_fields(merged)
+    return merged
+
+def make_unique_key(key: str, data: Dict[str, Any]) -> str:
+    if key not in data:
+        return key
+
+    i = 2
+    while f"{key}_{i}" in data:
+        i += 1
+
+    return f"{key}_{i}"
+
+
+def run_aoai_extraction_single_block(
+    block_text: str,
+    block_name: str,
+    suffix: str = "",
+    prompt: str = ""
+) -> Dict[str, Any]:
+
+    url = f"{Config.AOAI_ENDPOINT}/openai/deployments/{Config.AOAI_DEPLOYMENT}/chat/completions?api-version={Config.AOAI_API_VERSION}"
+
+    headers = {
+        "api-key": Config.AOAI_KEY,
+        "Content-Type": "application/json"
+    }
+
+    body = {
+        "messages": [
+            {
+                "role": "system",
+                "content": "Return JSON only. Extract all visible label-value pairs without omission."
+            },
+            {
+                "role": "user",
+                "content": build_block_extraction_prompt(
+                    block_text=block_text,
+                    block_name=block_name,
+                    suffix=suffix,
+                    user_prompt=prompt
+                )
+            }
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "max_tokens": 4096
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=body,
+        timeout=(
+            Config.HTTP_CONNECT_TIMEOUT_SEC,
+            Config.HTTP_READ_TIMEOUT_SEC
+        )
+    )
+
+    if response.status_code >= 400:
+        raise APIError(
+            "Azure OpenAI request failed.",
+            502,
+            {
+                "status_code": response.status_code,
+                "response": safe_json_or_text(response)
+            }
+        )
+
+    content = extract_aoai_content(response.json())
+    parsed = parse_json_safely(content)
+
+    if not isinstance(parsed, dict):
+        raise APIError(
+            "AI output must be a JSON object.",
+            502,
+            {"type": type(parsed).__name__}
+        )
+
+    return parsed
 
 def build_user_prompt(ocr_text: str, user_prompt: str) -> str:
     base = """
